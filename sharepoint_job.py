@@ -42,6 +42,7 @@ from docxtpl import InlineImage
 from docx.shared import Mm
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm, Cm
+import base64
 from PIL import Image
 import numpy as np
 import subprocess
@@ -530,27 +531,43 @@ def main():
 
     # === Konfiguration ===
     # App-Registrierung in Azure AD
-    tenant_id = os.getenv("TENANT_ID", "your-tenant-id")
-    client_id = os.getenv("CLIENT_ID", "your-client-id")
+    load_dotenv()
 
-    # Client-Secret (geheim)
-    thumbprint = os.getenv("THUMBPRINT", "your-thumbprint")
-    passphrase = os.getenv("PASSPHRASE", "your-passphrase")
+    SITE_URL = os.getenv("SITE_URL")
+    TENANT_ID = os.getenv("TENANT_ID")
+    CLIENT_ID = os.getenv("CLIENT_ID")
+    THUMBPRINT = os.getenv("THUMBPRINT")
+    cert_b64 = os.getenv("CERT_BASE64")
+    cert_path_env = os.getenv("CERT_PATH")
 
-    # SharePoint-Details
-    site_url = os.getenv("SITE_URL", "https://test")
-    list_name = os.getenv("LIST_NAME", "Tab_Kundendaten")
+    if cert_b64:
+        # ✅ Azure: use Base64 env variable
+        cert_file_path = "/tmp/cert.pem"
+        with open(cert_file_path, "wb") as f:
+            f.write(base64.b64decode(cert_b64))
+        CERT_PATH = Path(cert_file_path)
 
-    # === Token holen ===
-    authority = f"{os.getenv('AUTHORITY')}/{tenant_id}"
-    scope = [os.getenv("SCOPE")]
-    # app = ConfidentialClientApplication(client_id, authority=authority, client_credential=client_secret)
-    # token = app.acquire_token_for_client(scopes=scope)
+    elif cert_path_env:
+        # ✅ Local: use file path from .env
+        CERT_PATH = Path(cert_path_env)
 
-    # Get Cert File
-    cert_path = Path(
-        os.getenv("CERT_PATH", "/run/secrets/mycert.pem")
-    )
+    else:
+        raise ValueError("No certificate configuration found (CERT_BASE64 or CERT_PATH missing)")
+
+
+    if not SITE_URL:
+        raise ValueError("SITE_URL missing")
+
+    missing = [k for k, v in {
+        "SITE_URL": SITE_URL,
+        "TENANT_ID": TENANT_ID,
+        "CLIENT_ID": CLIENT_ID,
+        "THUMBPRINT": THUMBPRINT,
+        "CERT_PATH": CERT_PATH
+    }.items() if not v]
+
+    if missing:
+        raise ValueError(f"Missing env variables: {missing}")
 
     # if not CERT_PATH.exists():
     #     CERT_PATH = r"C:\Users\Vincent\Desktop\NorproofDocPopCert.pem"
@@ -558,10 +575,10 @@ def main():
 
     url = os.getenv("URL")
     ctx = ClientContext(base_url=url).with_client_certificate(
-        tenant=tenant_id, 
-        client_id=client_id,
-        thumbprint=thumbprint,
-        cert_path=cert_path
+        tenant=TENANT_ID, 
+        client_id=CLIENT_ID,
+        thumbprint=THUMBPRINT,
+        cert_path=CERT_PATH
     )
 
     # Liste "Dev_VC_Projekt" nur mit Status = "Offen"

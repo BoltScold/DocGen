@@ -7,6 +7,9 @@ csx
 edge
 Publish
 
+commands.txt
+main.py
+
 *.user
 *.suo
 *.cscfg

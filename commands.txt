@@ -1,0 +1,9 @@
+Redeploy:
+"
+func azure functionapp publish doc-gen-prod
+"
+
+Restart:
+az functionapp restart `
+  --name doc-gen-prod `
+  --resource-group rg-docgen-prod
