@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+local.settings.json
+doc-gen-prod-appsettings-backup.json
+doc-gen-prod-runtime-backup.json
+Invoke_Function.txt

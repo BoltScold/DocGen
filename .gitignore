@@ -9,6 +9,7 @@ Publish
 
 commands.txt
 main.py
+Gutachten.docx
 
 *.user
 *.suo
@@ -51,3 +52,7 @@ __pycache__/
 __blobstorage__
 __queuestorage__
 __azurite_db*__.json
+
+doc-gen-prod-appsettings-backup.json
+doc-gen-prod-runtime-backup.json
+Invoke_Function.txt

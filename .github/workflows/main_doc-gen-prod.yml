@@ -12,7 +12,7 @@ on:
 
 env:
   AZURE_FUNCTIONAPP_PACKAGE_PATH: '.' # set this to the path to your web app project, defaults to the repository root
-  PYTHON_VERSION: '3.11' # set this to the python version to use (supports 3.6, 3.7, 3.8)
+  PYTHON_VERSION: '3.13' # set this to the python version to use (supports 3.6, 3.7, 3.8)
 
 jobs:
   build:
@@ -74,6 +74,20 @@ jobs:
           client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_517E91F5331A4CB180BD4A504340359D }}
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_2D32CEEC0CC44A1F8FEC132538F7FF49 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_5C5A29E1A0954F1D901B20309A3B33E9 }}
+
+      - name: Configure Function App settings
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            az functionapp config appsettings set \
+              --resource-group "rg-docgen-prod" \
+              --name "doc-gen-prod" \
+              --settings \
+                "SITE_URL=${{ vars.SP_SITE_URL }}" \
+                "TENANT_ID=${{ secrets.SP_TENANT_ID }}" \
+                "CLIENT_ID=${{ secrets.SP_CLIENT_ID }}" \
+                "THUMBPRINT=${{ secrets.SP_THUMBPRINT }}" \
+                "CERT_BASE64=${{ secrets.SP_CERT_BASE64 }}"    
 
       - name: 'Deploy to Azure Functions'
         uses: Azure/functions-action@v1
