@@ -1612,45 +1612,56 @@ def main():
     cert_b64 = os.getenv("CERT_BASE64")
     cert_path_env = os.getenv("CERT_PATH")
 
-    if cert_b64:
-        # ✅ Azure: use Base64 env variable
-        cert_file_path = "/tmp/cert.pem"
-        with open(cert_file_path, "wb") as f:
-            f.write(base64.b64decode(cert_b64))
-        CERT_PATH = Path(cert_file_path)
-
-    elif cert_path_env:
-        # ✅ Local: use file path from .env
-        CERT_PATH = Path(cert_path_env)
-
-    else:
-        raise ValueError("No certificate configuration found (CERT_BASE64 or CERT_PATH missing)")
-
-
-    if not SITE_URL:
-        raise ValueError("SITE_URL missing")
-
-    missing = [k for k, v in {
-        "SITE_URL": SITE_URL,
-        "TENANT_ID": TENANT_ID,
-        "CLIENT_ID": CLIENT_ID,
-        "THUMBPRINT": THUMBPRINT,
-        "CERT_PATH": CERT_PATH
-    }.items() if not v]
+    missing = [
+        name
+        for name, value in {
+            "SITE_URL": SITE_URL,
+            "TENANT_ID": TENANT_ID,
+            "CLIENT_ID": CLIENT_ID,
+            "THUMBPRINT": THUMBPRINT,
+        }.items()
+        if not value
+    ]
 
     if missing:
-        raise ValueError(f"Missing env variables: {missing}")
+        raise ValueError(
+            f"Missing environment variables: {', '.join(missing)}"
+        )
 
-    # if not CERT_PATH.exists():
-    #     CERT_PATH = r"C:\Users\Vincent\Desktop\NorproofDocPopCert.pem"
-    #     #raise FileNotFoundError(f"Certificate not found: {CERT_PATH}")
+    if cert_b64:
+        cert_file_path = Path(tempfile.gettempdir()) / "cert.pem"
 
-    url = os.getenv("URL")
-    ctx = ClientContext(base_url=url).with_client_certificate(
-        tenant=TENANT_ID, 
+        try:
+            cert_file_path.write_bytes(
+                base64.b64decode(cert_b64, validate=True)
+            )
+        except Exception as exc:
+            raise ValueError(
+                "CERT_BASE64 is not valid Base64 data."
+            ) from exc
+
+        CERT_PATH = cert_file_path
+
+    elif cert_path_env:
+        CERT_PATH = Path(cert_path_env)
+
+        if not CERT_PATH.is_file():
+            raise FileNotFoundError(
+                f"Certificate not found: {CERT_PATH}"
+            )
+
+    else:
+        raise ValueError(
+            "CERT_BASE64 or CERT_PATH is missing."
+        )
+
+    ctx = ClientContext(
+        base_url=SITE_URL
+    ).with_client_certificate(
+        tenant=TENANT_ID,
         client_id=CLIENT_ID,
         thumbprint=THUMBPRINT,
-        cert_path=CERT_PATH
+        cert_path=CERT_PATH,
     )
 
     # Liste "Dev_VC_Projekt" nur mit Status = "Offen"
