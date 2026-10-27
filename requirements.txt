@@ -92,3 +92,4 @@ aspose-words==26.10.0
 pypdf==6.21.2
 lxml==6.0.2
 pypdf==6.21.2
+certifi==2026.2.25

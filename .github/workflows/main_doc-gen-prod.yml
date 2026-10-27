@@ -38,8 +38,24 @@ jobs:
 
       - name: Verify required dependencies
         run: |
-          PYTHONPATH=".python_packages/lib/site-packages" \
-            python -c "import lxml, pypdf; print('lxml:', lxml.__version__); print('pypdf:', pypdf.__version__)"
+          PYTHONPATH=".python_packages/lib/site-packages" python - <<'PY'
+          import os
+          import certifi
+          import lxml
+          import pypdf
+
+          ca_bundle = certifi.where()
+
+          print("lxml:", lxml.__version__)
+          print("pypdf:", pypdf.__version__)
+          print("CA bundle:", ca_bundle)
+          print("CA bundle exists:", os.path.isfile(ca_bundle))
+
+          if not os.path.isfile(ca_bundle):
+              raise RuntimeError(
+                  f"certifi CA bundle is missing: {ca_bundle}"
+              )
+          PY
 
       - name: Zip artifact for deployment
         run: |
@@ -51,7 +67,6 @@ jobs:
             -x "__pycache__/*" \
             -x "*.pyc" \
             -x ".env" \
-            -x "*.pem"
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
