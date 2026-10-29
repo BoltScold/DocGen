@@ -9,3 +9,19 @@ az functionapp restart `
   --name doc-gen-prod `
   --resource-group rg-docgen-prod
 "
+
+Invoke:
+"
+$masterKey = az functionapp keys list `
+  --resource-group "rg-docgen-prod" `
+  --name "doc-gen-prod" `
+  --query "masterKey" `
+  --output tsv
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "https://doc-gen-prod.azurewebsites.net/admin/functions/MyScheduledScript" `
+  -Headers @{ "x-functions-key" = $masterKey } `
+  -ContentType "application/json" `
+  -Body '{"input":null}'
+  "

@@ -36,6 +36,15 @@ jobs:
             --target=".python_packages/lib/site-packages" \
             -r requirements.txt
 
+      - name: Create virtual environment and validate dependencies
+        run: |
+          python -m venv antenv
+          source antenv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m pip check
+          python -m compileall -q app.py   
+
       - name: Verify required dependencies
         run: |
           PYTHONPATH=".python_packages/lib/site-packages" python - <<'PY'
