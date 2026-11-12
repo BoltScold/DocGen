@@ -33,6 +33,7 @@
 #     return jsonify(run_id=run_id, status="queued"), 202
 
 import os
+import html as html_lib
 import zipfile
 from lxml import etree
 from pypdf import PdfReader
@@ -58,6 +59,8 @@ from office365.sharepoint.listitems.caml.query import CamlQuery
 from pprint import pprint
 from pathlib import Path
 from collections import defaultdict
+from bs4 import BeautifulSoup, NavigableString, Tag
+from docxtpl import RichText
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -71,6 +74,141 @@ UNO_SCRIPT_PATH = (
     / "scripts"
     / "update_toc_uno.py"
 )
+
+CHAPTER_MAPPING = {
+    "Dachprobenanalyse":
+        "paragraphs_dachprobenanalyse",
+
+    "Begutachtungsziel":
+        "paragraphs_begutachtungsziel",
+
+    "Dachproben & Sichtbegutachtung":
+        "paragraphs_dachproben_sichtbegutachtung",
+
+    "Dachflächen Aufmaß":
+        "paragraphs_dachflaechen_aufmass",
+
+    "Dachsichtbegutachtung":
+        "paragraphs_dachsichtbegutachtung",
+
+    "Gesamtbewertung":
+        "paragraphs_gesamtbewertung",
+
+    "Dachaufbau & Analyse":
+        "paragraphs_dachaufbau_analyse",
+
+    "U-Wert Berechnung":
+        "paragraphs_u_wert_berechnung",
+
+    "Effizienz Beurteilung":
+        "paragraphs_effizienz_beurteilung",
+
+    "Energiebilanz & Empfehlungen":
+        "paragraphs_energiebilanz_empfehlungen",
+
+    "Statikprüfung":
+        "paragraphs_statikpruefung",
+
+    "Wärmedämmung & Druckfestigkeit":
+        "paragraphs_waermedaemmung_druckfestigkeit",
+
+    "Gebäudegeometrie":
+        "paragraphs_gebaeudegeometrie",
+
+    "Brandschutz":
+        "paragraphs_brandschutz",
+
+    "Gesamtbewertung Dachsubstanz":
+        "paragraphs_gesamtbewertung_ds_pv",
+
+    "Handlungsempfehlungen":
+        "paragraphs_handlungsempfehlungen",
+}
+
+TABLE_CHAPTER_MAPPING = {
+    "Dachprobenanalyse": "table_rows_dachprobenanalyse",
+    "Dachsichtbegutachtung": "table_rows_dachsichtbegutachtung",
+}
+
+def html_to_word_richtext(html: str) -> RichText:
+    """
+    Wandelt unterstütztes SharePoint-Rich-Text-HTML in
+    echtes docxtpl-RichText um.
+
+    Unterstützt:
+    - Fett
+    - Kursiv
+    - Unterstrichen
+    - Durchgestrichen
+    - Absätze und Zeilenumbrüche
+    - einfache Aufzählungen
+
+    Tabellen und eingebettete Bilder werden bewusst abgelehnt.
+    """
+
+    rt = RichText()
+    soup = BeautifulSoup(html or "", "html.parser")
+
+    unsupported = soup.find(["table", "img"])
+
+    if unsupported:
+        raise ValueError(
+            "Nicht unterstütztes Element in der SharePoint-Spalte "
+            f"'Data': <{unsupported.name}>. "
+            "Rich Text darf aktuell Textformatierung, Absätze und "
+            "Aufzählungen enthalten, aber keine Tabellen oder Bilder."
+        )
+
+    def walk(node, *, bold=False, italic=False, underline=False,
+             strike=False, prefix=""):
+
+        if isinstance(node, NavigableString):
+            text = str(node)
+
+            if text:
+                rt.add(
+                    prefix + text,
+                    bold=bold,
+                    italic=italic,
+                    underline=underline,
+                    strike=strike,
+                )
+
+            return
+
+        if not isinstance(node, Tag):
+            return
+
+        tag = node.name.lower()
+
+        next_bold = bold or tag in {"b", "strong"}
+        next_italic = italic or tag in {"i", "em"}
+        next_underline = underline or tag == "u"
+        next_strike = strike or tag in {"s", "strike", "del"}
+
+        if tag == "br":
+            rt.add("\n")
+            return
+
+        if tag == "li":
+            rt.add("• ")
+
+        for child in node.children:
+            walk(
+                child,
+                bold=next_bold,
+                italic=next_italic,
+                underline=next_underline,
+                strike=next_strike,
+            )
+
+        if tag in {"p", "div", "li"}:
+            rt.add("\n")
+
+    for child in soup.contents:
+        walk(child)
+
+    return rt
 
 def find_free_local_port() -> int:
     with socket.socket(
@@ -1223,28 +1361,30 @@ def upload_file_to_sharepoint_folder(
     return uploaded_file
 
 def extract_from_sharepoint(gutachten_texte_filtered_items, texts) -> Dict[str, List]:
-    paragraphs_begutachtungsziel                    = []
-    paragraphs_dachproben_sichtbegutachtung         = []
-    paragraphs_dachflaechen_aufmass                 = []
-    paragraphs_dachprobenanalyse                    = []
-    paragraphs_dachsichtbegutachtung                = []
-    paragraphs_dachsichtbegutachtung                = []
-    paragraphs_gesamtbewertung                      = []
-    paragraphs_dachaufbau_analyse                   = []
-    paragraphs_u_wert_berechnung                    = []
-    paragraphs_effizienz_beurteilung                = []
-    paragraphs_energiebilanz_empfehlungen           = []
-    paragraphs_statikpruefung                       = []
-    paragraphs_dachkonstruktion_ueberpruefung       = []
-    paragraphs_waermedaemmung_druckfestigkeit       = []
-    paragraphs_untersuchung_waermedaemmung          = []
-    paragraphs_feststellung_schwachstellen          = []
-    paragraphs_empfehlungen_belastbarkeit           = []
-    paragraphs_gebaeudegeometrie                    = []
-    paragraphs_brandschutz                          = []
-    paragraphs_gesamtbewertung_ds_pv                = []
-    paragraphs_handlungsempfehlungen                = []
-    tables_by_chapter                               = defaultdict(list)
+    result = {
+    "paragraphs_begutachtungsziel": [],
+    "paragraphs_dachproben_sichtbegutachtung": [],
+    "paragraphs_dachflaechen_aufmass": [],
+    "paragraphs_dachprobenanalyse": [],
+    "paragraphs_dachsichtbegutachtung": [],
+    "paragraphs_gesamtbewertung": [],
+    "paragraphs_dachaufbau_analyse": [],
+    "paragraphs_u_wert_berechnung": [],
+    "paragraphs_effizienz_beurteilung": [],
+    "paragraphs_energiebilanz_empfehlungen": [],
+    "paragraphs_statikpruefung": [],
+    "paragraphs_dachkonstruktion_ueberpruefung": [],
+    "paragraphs_waermedaemmung_druckfestigkeit": [],
+    "paragraphs_untersuchung_waermedaemmung": [],
+    "paragraphs_feststellung_schwachstellen": [],
+    "paragraphs_empfehlungen_belastbarkeit": [],
+    "paragraphs_gebaeudegeometrie": [],
+    "paragraphs_brandschutz": [],
+    "paragraphs_gesamtbewertung_ds_pv": [],
+    "paragraphs_handlungsempfehlungen": [],
+    "table_rows_dachprobenanalyse": [],
+    "table_rows_dachsichtbegutachtung": [],
+    }
     
     #Ergebnis durchlaufen
     for item in gutachten_texte_filtered_items:
@@ -1256,113 +1396,124 @@ def extract_from_sharepoint(gutachten_texte_filtered_items, texts) -> Dict[str, 
 
         #print(f"Level: {level}, Data: {data}, Type: {data_type}, Chapter: {chapter}")
 
-        # Build the same dict‐shape that your JSON loader used before.
+        # Build a safe, type-specific data structure.
         if data_type == "image":
             para_dict = {"level": 0, "type": "image", "src": data}
-            # append to the correct paragraph list (same as before)
+
         elif data_type == "table":
-            # parse table rows and store under this chapter
-            para_dict = extract_table_rows_from_data_field(data)
-            #print("WICHTIG")
-            print(para_dict)
-            #print("WICHTIG")
-        else:
-            para_dict = {"level": level, "type": "text", "text": data}
+            table_target = TABLE_CHAPTER_MAPPING.get(chapter)
+            if not table_target:
+                raise ValueError(
+                    f"Kein Tabellen-Mapping für Kapitel {chapter!r} vorhanden."
+                )
 
-        # Decide which of the 15 lists to append to, based on chapter.
-        # (Adjust these string‐matches to exactly whatever chapter holds.)
+            table_rows = extract_table_rows_from_data_field(data)
+            result[table_target].extend(table_rows)
 
-        if chapter == "Begutachtungsziel":
-            paragraphs_begutachtungsziel.append(para_dict)
-        elif chapter == "Dachproben & Sichtbegutachtung":
-            paragraphs_dachproben_sichtbegutachtung.append(para_dict)
-        elif chapter == "Dachflächen Aufmaß":
-            paragraphs_dachflaechen_aufmass.append(para_dict)
-        elif chapter == "Dachprobenanalyse":
-            paragraphs_dachprobenanalyse.append(para_dict)
-        elif chapter == "Dachsichtbegutachtung":
-            paragraphs_dachsichtbegutachtung.append(para_dict)
-        elif chapter == "Gesamtbewertung":
-            paragraphs_gesamtbewertung.append(para_dict)
-        elif chapter == "Dachaufbau & Analyse":
-            paragraphs_dachaufbau_analyse.append(para_dict)
-        elif chapter == "U-Wert Berechnung":
-            paragraphs_u_wert_berechnung.append(para_dict)
-        elif chapter == "Effizienz Beurteilung":
-            paragraphs_effizienz_beurteilung.append(para_dict)
-        elif chapter == "Energiebilanz & Empfehlungen":
-            paragraphs_energiebilanz_empfehlungen.append(para_dict)
-        elif chapter == "Statikprüfung":
-            paragraphs_statikpruefung.append(para_dict)
-        elif chapter == "Dachkonstruktion Überprüfung":
-            paragraphs_dachkonstruktion_ueberpruefung.append(para_dict)
-        elif chapter == "Wärmedämmung & Druckfestigkeit":
-            paragraphs_waermedaemmung_druckfestigkeit.append(para_dict)
-        elif chapter == "Untersuchung Wärmedämmung":
-            paragraphs_untersuchung_waermedaemmung.append(para_dict)
-        elif chapter == "Feststellung Schwachstellen":
-            paragraphs_feststellung_schwachstellen.append(para_dict)
-        elif chapter == "Empfehlungen Belastbarkeit":
-            paragraphs_empfehlungen_belastbarkeit.append(para_dict)
-        elif chapter == "Gebäudegeometrie":
-            paragraphs_gebaeudegeometrie.append(para_dict)
-        elif chapter == "Brandschutz":
-            paragraphs_brandschutz.append(para_dict)
-        elif chapter == "Gesamtbewertung DS PV":
-            paragraphs_gesamtbewertung_ds_pv.append(para_dict)
-        elif chapter == "Handlungsempfehlungen":
-            paragraphs_handlungsempfehlungen.append(para_dict)
+            print(
+                f"TABLE DEBUG | Dach={props.get('Dach_ID')!r} "
+                f"| Kapitel={chapter!r} | Zeilen={len(table_rows)}"
+            )
+            for row_index, row in enumerate(table_rows, start=1):
+                print(f"  Zeile {row_index}: {row!r}")
 
-        else:
-            # If there are any extra levels (or missing ones), you can either skip or log them.
-            # print(f"Warning: Unmapped Level '{level}'. Skipping.")
+            # Table rows must never enter a paragraph/RichText list.
             continue
 
-    return {
-        "paragraphs_begutachtungsziel":                    paragraphs_begutachtungsziel,
-        "paragraphs_dachproben_sichtbegutachtung":         paragraphs_dachproben_sichtbegutachtung,
-        "paragraphs_dachflaechen_aufmass":                 paragraphs_dachflaechen_aufmass,
-        "paragraphs_dachprobenanalyse":                    paragraphs_dachprobenanalyse,
-        "paragraphs_dachsichtbegutachtung":                paragraphs_dachsichtbegutachtung,
-        "paragraphs_gesamtbewertung":                      paragraphs_gesamtbewertung,
-        "paragraphs_dachaufbau_analyse":                   paragraphs_dachaufbau_analyse,
-        "paragraphs_u_wert_berechnung":                    paragraphs_u_wert_berechnung,
-        "paragraphs_effizienz_beurteilung":                paragraphs_effizienz_beurteilung,
-        "paragraphs_energiebilanz_empfehlungen":           paragraphs_energiebilanz_empfehlungen,
-        "paragraphs_statikpruefung":                       paragraphs_statikpruefung,
-        "paragraphs_dachkonstruktion_ueberpruefung":       paragraphs_dachkonstruktion_ueberpruefung,
-        "paragraphs_waermedaemmung_druckfestigkeit":       paragraphs_waermedaemmung_druckfestigkeit,
-        "paragraphs_untersuchung_waermedaemmung":          paragraphs_untersuchung_waermedaemmung,
-        "paragraphs_feststellung_schwachstellen":          paragraphs_feststellung_schwachstellen,
-        "paragraphs_empfehlungen_belastbarkeit":           paragraphs_empfehlungen_belastbarkeit,
-        "paragraphs_gebaeudegeometrie":                    paragraphs_gebaeudegeometrie,
-        "paragraphs_brandschutz":                          paragraphs_brandschutz,
-        "paragraphs_gesamtbewertung_ds_pv":                paragraphs_gesamtbewertung_ds_pv,
-        "paragraphs_handlungsempfehlungen":                paragraphs_handlungsempfehlungen,
-        "texts":                                           texts
-    }
+        else:
+            para_dict = {
+                "level": level,
+                "type": "rich_text",
+                "html": data or "",
+            }
 
-def extract_table_rows_from_data_field(raw_data: str) -> List[Dict[str, List]]:
-    rows: List[Dict[str, List]] = []
+        target = CHAPTER_MAPPING.get(chapter)
+        if target:
+            result[target].append(para_dict)
+
+        # if chapter == "Begutachtungsziel":
+        #     paragraphs_begutachtungsziel.append(para_dict)
+        # elif chapter == "Dachproben & Sichtbegutachtung":
+        #     paragraphs_dachproben_sichtbegutachtung.append(para_dict)
+        # elif chapter == "Dachflächen Aufmaß":
+        #     paragraphs_dachflaechen_aufmass.append(para_dict)
+        # elif chapter == "Dachprobenanalyse":
+        #     paragraphs_dachprobenanalyse.append(para_dict)
+        # elif chapter == "Dachsichtbegutachtung":
+        #     paragraphs_dachsichtbegutachtung.append(para_dict)
+        # elif chapter == "Gesamtbewertung":
+        #     paragraphs_gesamtbewertung.append(para_dict)
+        # elif chapter == "Dachaufbau & Analyse":
+        #     paragraphs_dachaufbau_analyse.append(para_dict)
+        # elif chapter == "U-Wert Berechnung":
+        #     paragraphs_u_wert_berechnung.append(para_dict)
+        # elif chapter == "Effizienz Beurteilung":
+        #     paragraphs_effizienz_beurteilung.append(para_dict)
+        # elif chapter == "Energiebilanz & Empfehlungen":
+        #     paragraphs_energiebilanz_empfehlungen.append(para_dict)
+        # elif chapter == "Statikprüfung":
+        #     paragraphs_statikpruefung.append(para_dict)
+        # elif chapter == "Dachkonstruktion Überprüfung":
+        #     paragraphs_dachkonstruktion_ueberpruefung.append(para_dict)
+        # elif chapter == "Wärmedämmung & Druckfestigkeit":
+        #     paragraphs_waermedaemmung_druckfestigkeit.append(para_dict)
+        # elif chapter == "Untersuchung Wärmedämmung":
+        #     paragraphs_untersuchung_waermedaemmung.append(para_dict)
+        # elif chapter == "Feststellung Schwachstellen":
+        #     paragraphs_feststellung_schwachstellen.append(para_dict)
+        # elif chapter == "Empfehlungen Belastbarkeit":
+        #     paragraphs_empfehlungen_belastbarkeit.append(para_dict)
+        # elif chapter == "Gebäudegeometrie":
+        #     paragraphs_gebaeudegeometrie.append(para_dict)
+        # elif chapter == "Brandschutz":
+        #     paragraphs_brandschutz.append(para_dict)
+        # elif chapter == "Gesamtbewertung DS PV":
+        #     paragraphs_gesamtbewertung_ds_pv.append(para_dict)
+        # elif chapter == "Handlungsempfehlungen":
+        #     paragraphs_handlungsempfehlungen.append(para_dict)
+
+        # else:
+        #     # If there are any extra levels (or missing ones), you can either skip or log them.
+        #     # print(f"Warning: Unmapped Level '{level}'. Skipping.")
+        #     continue
+
+    result["texts"] = texts
+    return result
+
+def extract_table_rows_from_data_field(raw_data: str) -> List[Dict[str, Any]]:
+    """Decode SharePoint rich-text HTML and parse table triplets safely."""
     if not raw_data:
-        return rows
+        return []
 
-    # Split exactly on the delimiter. Do NOT remove interior newlines in tokens.
-    parts = [p.strip() for p in re.split(r"_\|_", raw_data) if p is not None]
-    # Remove purely-empty tokens
-    parts = [p for p in parts if p != ""]
+    decoded_html = html_lib.unescape(str(raw_data))
+    soup = BeautifulSoup(decoded_html, "html.parser")
+    for unwanted in soup(["script", "style"]):
+        unwanted.decompose()
 
-    # Group into triplets (nr, description, image_src)
-    i = 0
-    while i < len(parts):
-        nr = parts[i] if i < len(parts) else ""
-        description = parts[i + 1] if (i + 1) < len(parts) else ""
-        image_src = parts[i + 2] if (i + 2) < len(parts) else ""
+    plain_text = soup.get_text(separator="\n")
+    plain_text = (
+        plain_text.replace("\u200b", "").replace("\xa0", " ").strip()
+    )
 
+    parts = [part.strip() for part in re.split(r"_\|_", plain_text)]
+    parts = [part for part in parts if part]
+
+    if len(parts) % 3 != 0:
+        raise ValueError(
+            "Ungültige Tabellendaten: Nach dem Entfernen des SharePoint-HTML "
+            f"wurden {len(parts)} Werte gefunden; erwartet wird ein Vielfaches "
+            f"von 3 (Nr., Beschreibung, Bild). Werte={parts!r}"
+        )
+
+    rows: List[Dict[str, Any]] = []
+    for index in range(0, len(parts), 3):
+        nr, description, image_src = parts[index:index + 3]
         rows.append({
-            "cols": [nr, description, image_src]
+            "nr": nr,
+            "description": description,
+            "image_src": image_src,
+            "image": "",
         })
-        i += 3
     return rows
 
 def build_report(
@@ -1394,6 +1545,23 @@ def build_report(
                     p2[k] = v
             out.append(p2)
         return out
+
+    def convert_rich_text(paragraphs):
+        result = []
+
+        for paragraph in paragraphs or []:
+            if (
+                isinstance(paragraph, dict)
+                and paragraph.get("type") == "rich_text"
+            ):
+                paragraph = dict(paragraph)
+                paragraph["rich_text"] = html_to_word_richtext(
+                    paragraph.get("html", "")
+                )
+
+            result.append(paragraph)
+
+        return result
 
     # make one temp folder per build
     _image_cache = {}
@@ -1472,27 +1640,74 @@ def build_report(
         # docx InlineImage expects Length; pass Mm
         return InlineImage(tpl, local_path, width=Mm(w_mm), height=Mm(h_mm))
 
+    table_rows_dachprobenanalyse = list(
+        data.get("table_rows_dachprobenanalyse", [])
+    )
+    table_rows_dachsichtbegutachtung = list(
+        data.get("table_rows_dachsichtbegutachtung", [])
+    )
+
     # Normalize paragraphs (existing keys in your original code)
-    paragraphs_begutachtungsziel = normalize_newlines(data.get("paragraphs_begutachtungsziel", []))
-    paragraphs_dachproben_sichtbegutachtung = normalize_newlines(data.get("paragraphs_dachproben_sichtbegutachtung", []))
-    paragraphs_dachflaechen_aufmass = normalize_newlines(data.get("paragraphs_dachflaechen_aufmass", []))
-    paragraphs_dachprobenanalyse = data.get("paragraphs_dachprobenanalyse", [])[0]
-    paragraphs_dachsichtbegutachtung = data.get("paragraphs_dachsichtbegutachtung", [])[0]
-    paragraphs_gesamtbewertung = normalize_newlines(data.get("paragraphs_gesamtbewertung", []))
-    paragraphs_dachaufbau_analyse = normalize_newlines(data.get("paragraphs_dachaufbau_analyse", []))
-    paragraphs_u_wert_berechnung = normalize_newlines(data.get("paragraphs_u_wert_berechnung", []))
-    paragraphs_effizienz_beurteilung = normalize_newlines(data.get("paragraphs_effizienz_beurteilung", []))
-    paragraphs_energiebilanz_empfehlungen = normalize_newlines(data.get("paragraphs_energiebilanz_empfehlungen", []))
-    paragraphs_statikpruefung = normalize_newlines(data.get("paragraphs_statikpruefung", []))
-    paragraphs_dachkonstruktion_ueberpruefung = normalize_newlines(data.get("paragraphs_dachkonstruktion_ueberpruefung", []))
-    paragraphs_waermedaemmung_druckfestigkeit = normalize_newlines(data.get("paragraphs_waermedaemmung_druckfestigkeit", []))
-    paragraphs_untersuchung_waermedaemmung = normalize_newlines(data.get("paragraphs_untersuchung_waermedaemmung", []))
-    paragraphs_feststellung_schwachstellen = normalize_newlines(data.get("paragraphs_feststellung_schwachstellen", []))
-    paragraphs_empfehlungen_belastbarkeit = normalize_newlines(data.get("paragraphs_empfehlungen_belastbarkeit", []))
-    paragraphs_gebaeudegeometrie = normalize_newlines(data.get("paragraphs_gebaeudegeometrie", []))
-    paragraphs_brandschutz = normalize_newlines(data.get("paragraphs_brandschutz", []))
-    paragraphs_gesamtbewertung_ds_pv = normalize_newlines(data.get("paragraphs_gesamtbewertung_ds_pv", []))
-    paragraphs_handlungsempfehlungen = normalize_newlines(data.get("paragraphs_handlungsempfehlungen", []))
+    paragraphs_begutachtungsziel = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_begutachtungsziel", []))
+    )
+    paragraphs_dachproben_sichtbegutachtung = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_dachproben_sichtbegutachtung", []))
+    )
+    paragraphs_dachflaechen_aufmass = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_dachflaechen_aufmass", []))
+    )
+    paragraphs_dachprobenanalyse = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_dachprobenanalyse", []))
+    )
+    paragraphs_dachsichtbegutachtung = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_dachsichtbegutachtung", []))
+    )
+    paragraphs_gesamtbewertung = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_gesamtbewertung", []))
+    )
+    paragraphs_dachaufbau_analyse = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_dachaufbau_analyse", []))
+    )
+    paragraphs_u_wert_berechnung = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_u_wert_berechnung", []))
+    )
+    paragraphs_effizienz_beurteilung = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_effizienz_beurteilung", []))
+    )
+    paragraphs_energiebilanz_empfehlungen = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_energiebilanz_empfehlungen", []))
+    )
+    paragraphs_statikpruefung = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_statikpruefung", []))
+    )
+    paragraphs_dachkonstruktion_ueberpruefung = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_dachkonstruktion_ueberpruefung", []))
+    )
+    paragraphs_waermedaemmung_druckfestigkeit = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_waermedaemmung_druckfestigkeit", []))
+    )
+    paragraphs_untersuchung_waermedaemmung = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_untersuchung_waermedaemmung", []))
+    )
+    paragraphs_feststellung_schwachstellen = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_feststellung_schwachstellen", []))
+    )
+    paragraphs_empfehlungen_belastbarkeit = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_empfehlungen_belastbarkeit", []))
+    )
+    paragraphs_gebaeudegeometrie = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_gebaeudegeometrie", []))
+    )
+    paragraphs_brandschutz = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_brandschutz", []))
+    )
+    paragraphs_gesamtbewertung_ds_pv = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_gesamtbewertung_ds_pv", []))
+    )
+    paragraphs_handlungsempfehlungen = convert_rich_text(
+        normalize_newlines(data.get("paragraphs_handlungsempfehlungen", []))
+    )
 
     # Build images inside generic paragraph lists if type == image
     all_paragraphs = (paragraphs_begutachtungsziel + paragraphs_dachproben_sichtbegutachtung +
@@ -1521,6 +1736,34 @@ def build_report(
     # Convert image_src -> InlineImage (or text placeholder) and expose as context['tables']
     # -----------------------------
 
+    for table_name, table_rows in (
+        ("Dachprobenanalyse", table_rows_dachprobenanalyse),
+        ("Dachsichtbegutachtung", table_rows_dachsichtbegutachtung),
+    ):
+        for row_index, row in enumerate(table_rows, start=1):
+            image_src = row.get("image_src", "").strip()
+            if not image_src:
+                continue
+            image = make_image(
+                image_src,
+                force_width_cm=6.0,
+                max_height_cm=8.0,
+                _temp_img_dir=_temp_img_dir,
+            )
+            if image is None:
+                raise ValueError(
+                    f"Bild für Tabelle {table_name}, Zeile {row_index} "
+                    f"nicht verfügbar: {image_src!r}"
+                )
+            row["image"] = image
+
+    print(
+        "TABLES READY | Dachprobenanalyse="
+        f"{len(table_rows_dachprobenanalyse)} | "
+        "Dachsichtbegutachtung="
+        f"{len(table_rows_dachsichtbegutachtung)}"
+    )
+
     # 3. Build context and render
     context = {
         "page_break": "\f",  # Word’s page-break marker
@@ -1544,6 +1787,8 @@ def build_report(
         "paragraphs_brandschutz": paragraphs_brandschutz,
         "paragraphs_gesamtbewertung_ds_pv": paragraphs_gesamtbewertung_ds_pv,
         "paragraphs_handlungsempfehlungen": paragraphs_handlungsempfehlungen,
+        "table_rows_dachprobenanalyse": table_rows_dachprobenanalyse,
+        "table_rows_dachsichtbegutachtung": table_rows_dachsichtbegutachtung,
         **texts
     }
     if "normen_und_richtlinien" in context:
@@ -1551,10 +1796,12 @@ def build_report(
 
     #print(f"Context - paragraphs_dachprobenanalyse:\n{context['paragraphs_dachprobenanalyse']}")
     #exit()
-    tpl.render(context)
+    tpl.render(context, autoescape=True)
 
-    # now post-process the generated document to set "page break before"
-    doc = tpl.docx  # underlying python-docx Document
+    temp_rendered = output_path + ".rendered.docx"
+    tpl.save(temp_rendered)
+
+    doc = Document(temp_rendered)
 
     first = True
     for para in doc.paragraphs:
@@ -1565,7 +1812,12 @@ def build_report(
             else:
                 para.paragraph_format.page_break_before = True
 
-    tpl.save(output_path)
+    doc.save(output_path)
+
+    input(
+        f"Datei prüfen:\n{output_path}\n\n"
+        "Beliebige Taste ..."
+    )
 
     print(
         f"DOCX aus Template erzeugt: {output_path}"
@@ -1690,7 +1942,7 @@ def main():
     caml = CamlQuery()
     for project in filtered_projects:
         props             = project.properties
-        #print(props)
+        print(props)
         ID = props["ID"]
         project_id  = props["Projekt_ID"]
         # Format stand from "2024-06-07T07:00:00Z" to "07.06.2024"
@@ -1717,6 +1969,7 @@ def main():
         </Query>
         </View>
         """
+        
         # Führe die Abfrage aus
         filtered_customer = customer_list.get_items(caml).execute_query()
         if not filtered_customer:
@@ -1748,8 +2001,8 @@ def main():
         <Query>
             <Where>
             <Eq>
-                <FieldRef Name='Title' /> 
-                <Value Type='Text'>{project_id}</Value>
+                <FieldRef Name='Projekt_ID' /> 
+                <Value Type='Text'>{auftraggeber_id}</Value>
             </Eq>
             </Where>
         </Query>
@@ -1758,31 +2011,54 @@ def main():
 
         #Gefilterte Items abfragen
         gutachten_texte_filtered_items = gutachten_texte_list.get_items(caml).execute_query()
+        print(
+            f"Anzahl Gutachten-Texte gefunden: "
+            f"{len(gutachten_texte_filtered_items)}"
+        )
+        for item in gutachten_texte_filtered_items:
+            print(item.properties)
+        items_by_dach = defaultdict(list)
+
+        for item in gutachten_texte_filtered_items:
+            dach_id = item.properties.get("Dach_ID")
+
+            if dach_id:
+                items_by_dach[dach_id].append(item)
         dict_result = extract_from_sharepoint(gutachten_texte_filtered_items, texts)
 
-        with tempfile.NamedTemporaryFile(prefix=f"{project_id}_", suffix=".docx", delete=False) as f:
-            output_docx = f.name
-            
-        input_docx = os.path.join(os.path.dirname(__file__), output_docx)
-        build_report(
-        data=dict_result,
-        template_path=str(TEMPLATE_PATH),
-        output_path=output_docx,
-        export_pdf=False,
-        _temp_img_dir=_temp_img_dir,
-        ctx=ctx
-        )
-        uploaded = upload_file_to_sharepoint_folder(
-            ctx=ctx,
-            local_file_path=output_docx,
-            folder_server_relative_url=f"/sites/Norproof/Projektdaten/{project_id}",
-            target_file_name="Gutachten.docx",
-            status_list_title="Tab_Projekte",
-            status_item_id=ID,
-            status_field_internal_name="Status",
-            status_value="Gutachten erstellt",
-        )
-        shutil.rmtree(_temp_img_dir, ignore_errors=True)
+        for dach_id, dach_items in items_by_dach.items():
+
+            with tempfile.NamedTemporaryFile(
+                prefix=f"{project_id}_{dach_id}_",
+                suffix=".docx",
+                delete=False
+            ) as f:
+                output_docx = f.name
+
+            dict_result = extract_from_sharepoint(
+                dach_items,
+                texts
+            )
+
+            build_report(
+            data=dict_result,
+            template_path=str(TEMPLATE_PATH),
+            output_path=output_docx,
+            export_pdf=False,
+            _temp_img_dir=_temp_img_dir,
+            ctx=ctx
+            )
+            uploaded = upload_file_to_sharepoint_folder(
+                ctx=ctx,
+                local_file_path=output_docx,
+                folder_server_relative_url=f"/sites/Norproof/Projektdaten/{project_id}",
+                target_file_name=f"{project_id}_{dach_id}_Gutachten.docx",
+                status_list_title="Tab_Projekte",
+                status_item_id=ID,
+                status_field_internal_name="Status",
+                status_value="Gutachten erstellt",
+            )
+            shutil.rmtree(_temp_img_dir, ignore_errors=True)
 
 if __name__ == "__main__":
     try:

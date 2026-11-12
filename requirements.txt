@@ -93,3 +93,4 @@ pypdf==6.21.2
 lxml==6.0.2
 pypdf==6.21.2
 certifi==2026.2.25
+beautifulsoup4==4.14.3
